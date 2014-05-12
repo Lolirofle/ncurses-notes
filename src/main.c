@@ -2,10 +2,12 @@
 #include <menu.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <form.h>
+#include <locale.h>
 
 #include "exit.h"
 #include "menu.h"
-#include "input.h"
 
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
 #define KEY_CTRL(x)  ((x)&0x1F)
@@ -73,19 +75,190 @@ static void Item_free(ITEM* item){
 	free_item(item);
 }
 
+size_t getnstr_custom(char* buffer,size_t bufferSize){
+	buffer[0] = 'T';
+	return 1;
+}
+
+static int ItemEntry_input(){
+	FIELD *field[] = {
+		new_field(1,COLS,LINES-1,0,0,0),
+		new_field(10,10,2,2,0,0),
+		NULL
+	};
+	
+	//Field options
+	for(unsigned char i=sizeof(field)/sizeof(field[0]);i-->0;){
+		set_field_back(field[i],A_UNDERLINE);//Enable underlined field
+		field_opts_off(field[i],O_AUTOSKIP); //Disable auto skipping to next field when filled up
+		field_opts_off(field[i],O_STATIC);
+		set_max_field(field[i],512);
+	}
+
+	//Initiate form
+	FORM* form = new_form(field);
+	post_form(form);
+	
+	//Refresh display
+	refresh();
+
+	//Setup form input mode
+	enum{
+		MODE_OVERLAY,
+		MODE_INSERT,
+	}mode = MODE_INSERT;
+	form_driver(form,REQ_INS_MODE);
+
+	enum{
+		ESCAPE_FALSE,
+		ESCAPE_TRUE,
+		ESCAPE_CSI,
+	}escaped = ESCAPE_FALSE;
+	#define ESCAPEBUFFER_SIZE 16
+	char escapeBuffer[ESCAPEBUFFER_SIZE];
+	unsigned char escapeBufferLength = 0;
+
+	//Fetch input
+	int ch;
+	while((ch = getch())){
+		//http://en.wikipedia.org/wiki/ANSI_escape_code
+		if(escaped == ESCAPE_TRUE){
+			switch(ch){
+				case '[':
+					escaped = ESCAPE_CSI;
+					break;
+
+				case 0  ... 63 :
+				case 96 ... 255:
+					//TODO: Multi character escape
+					break;
+
+				default:
+				EscapeNormal_break:
+					escaped = ESCAPE_FALSE;
+					escapeBufferLength = 0;
+					break;
+			}
+		}else if(escaped ==ESCAPE_CSI){
+			switch(ch){
+				case 'D'://Word left
+					form_driver(form,REQ_PREV_WORD);
+					goto EscapeCsi_break;
+
+				case 'C'://Word right
+					form_driver(form,REQ_NEXT_WORD);
+					goto EscapeCsi_break;
+
+				case 0  ... 63 :
+				case 127 ... 255:
+					//TODO: Multi character escape
+					break;
+
+				default:
+				EscapeCsi_break:
+					escaped = ESCAPE_FALSE;
+					escapeBufferLength = 0;
+					break;
+			}
+		}else{
+			switch(ch){
+				case 9://Tab
+					form_driver(form,REQ_NEXT_FIELD);
+					break;
+
+				case 353://Shift + Tab
+					form_driver(form,REQ_PREV_FIELD);
+					break;
+
+				case KEY_DOWN:
+					form_driver(form,REQ_NEXT_LINE);
+					break;
+
+				case KEY_UP:
+					form_driver(form,REQ_PREV_LINE);
+					break;
+
+				case KEY_LEFT:
+					form_driver(form,REQ_PREV_CHAR);
+					break;
+
+				case KEY_RIGHT:
+					form_driver(form,REQ_NEXT_CHAR);
+					break;
+
+				case 262://Home
+					form_driver(form,REQ_BEG_LINE);
+					break;
+
+				case 360://End
+					form_driver(form,REQ_END_LINE);
+					break;
+
+				case KEY_BACKSPACE:
+					form_driver(form,REQ_DEL_PREV);
+					break;
+
+				case 8://CTRL + Backspace (Why is this assigned to the ASCII BS/backspace on my current setup?)
+					form_driver(form,REQ_DEL_WORD);
+					break;
+
+				case KEY_DC://Delete
+					form_driver(form,REQ_DEL_CHAR);
+					break;
+
+				case 27://Escape
+					escaped = ESCAPE_TRUE;
+					break;
+
+				case 155://CSI Escape
+					escaped = ESCAPE_CSI;
+					break;
+
+				case KEY_ENTER:
+				case 10:
+				case 13:
+					goto Form_free;
+
+				case 331://Insert
+					switch(mode){
+						case MODE_OVERLAY:
+							form_driver(form,REQ_INS_MODE);
+							mode = MODE_INSERT;
+							break;
+
+						case MODE_INSERT:
+							form_driver(form,REQ_OVL_MODE);
+							mode = MODE_OVERLAY;
+							break;
+					}
+					break;
+
+				default:
+					form_driver(form,ch);
+					break;
+			}
+		}
+	}
+
+	//Free
+	Form_free:{
+		int returnCode = EXIT_SUCCESS;
+		
+		if(form_driver(form,REQ_VALIDATION)==E_OK){
+			char* buffer = field_buffer(field,0);
+		}else
+			returnCode = EXIT_FAILURE;
+
+		unpost_form(form);
+		free_form(form);
+		for(unsigned char i=sizeof(field)/sizeof(field[0]);i-->0;)
+			free_field(field[i]);
+	}
+}
+
 static int button_performAdd(struct MenuData* menuData){
 	if(menuData->itemsLen<menuData->itemsSize){
-		//Clear last lines
-		move(LINES-1,0);
-		clrtoeol();
-
-		//Get title from input
-		mvprintw(LINES-1,0,"Input: ");
 		size_t inputLength = getnstr_custom(inputBuffer,INPUTBUFFER_LENGTH);
-
-		//Clear last lines
-		move(LINES-1,0);
-		clrtoeol();
 
 		//Silently ignore empty input
 		if(inputLength==0)
@@ -116,6 +289,9 @@ static int button_performAdd(struct MenuData* menuData){
 int main(){
 	int exitCode = EXIT_SUCCESS;
 	struct MenuData menuData;
+
+	//Unicode input with forms doesn't work without this?
+	setlocale(LC_ALL,"");
 
 	//Initiate buffers
 	if(!(inputBuffer = calloc(INPUTBUFFER_LENGTH,sizeof(char)))){

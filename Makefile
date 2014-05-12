@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-std=c99 -Wall -g
-LFLAGS=-lmenuw -lncursesw
+LFLAGS=-lmenuw -lncursesw -lformw
 
 SRCDIR=src
 OBJDIR=obj
