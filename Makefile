@@ -1,6 +1,6 @@
 CC=gcc
-CFLAGS=-std=c99 -Wall
-LFLAGS=-lmenu -lncurses
+CFLAGS=-std=c99 -Wall -g
+LFLAGS=-lmenuw -lncursesw
 
 SRCDIR=src
 OBJDIR=obj
@@ -29,3 +29,4 @@ run:
 
 clean:
 	rm -f ${BINDIR}/${OUT}
+	rm -f ${OBJECTS}

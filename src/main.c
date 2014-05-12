@@ -1,88 +1,154 @@
 #include <curses.h>
 #include <menu.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <ctype.h>
+
+#include "exit.h"
+#include "menu.h"
+#include "input.h"
 
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
 #define KEY_CTRL(x)  ((x)&0x1F)
 
-#define EXIT_ALLOCATION_FAILURE 54
-#define EXIT_INPUT_ERROR 13
-
 #define INPUTBUFFER_LENGTH 512
+char* inputBuffer;
 
-struct EntryData{
-	unsigned short priority;
-	time_t datetime;
-	time_t deadline;
-};
+static ITEM* Item_createEntry(char* title,char* description){
+	ITEM* item = new_item(title,description);
+	if(!item)
+		return NULL;
+	
+	//Allocate and initate item data
+	struct ItemData* data = malloc(sizeof(struct ItemData));
+	if(!data)
+		return NULL;
 
-enum ItemDataType{
-	ITEMDATATYPE_BUTTON,
-	ITEMDATATYPE_ENTRY,
-};
+	set_item_userptr(item,data);
 
-struct ItemData{
-	enum ItemDataType type;
-	union{
-		struct EntryData entry;
+	data->type = ITEMDATATYPE_ENTRY;
+	data->entry = (struct EntryData){
+		.title       = title,
+		.description = description,
+		.priority    = 0,
+		.datetime    = time(NULL),
+		.deadline    = 0,
 	};
-};
 
-size_t getnstr_custom(char* buffer,size_t maxLength){
-	size_t length = 0;
-	int c;
-	while((c=getch())){
-		switch(c){
-			case KEY_ENTER:
-			case '\n':
-			case '\r':
-				*buffer = '\0';
-				return length;
-			
-			default:
-				if(length<maxLength && isprint(c)){
-					*buffer++ = c;
-					++length;
-				}
-				break;
-		}
+	return item;
+}
+
+static ITEM* Item_createButton(char* title,int(*perform)(struct MenuData* menuData)){
+	ITEM* item = new_item(title,NULL);
+
+	//Allocate and initate item data
+	struct ItemData* data = malloc(sizeof(struct ItemData));
+	if(!data)
+		return NULL;
+
+	set_item_userptr(item,data);
+
+	data->type = ITEMDATATYPE_BUTTON;
+	data->button.perform = perform;
+
+	return item;
+}
+
+static void Item_free(ITEM* item){
+	struct ItemData* data = item_userptr(item);
+
+	//Free item data
+	switch(data->type){
+		case ITEMDATATYPE_ENTRY:
+			free(data->entry.title);
+			free(data->entry.description);
+			break;
+		
+		default:
+			break;
 	}
+
+	free(data);
+
+	//Free item
+	free_item(item);
+}
+
+static int button_performAdd(struct MenuData* menuData){
+	if(menuData->itemsLen<menuData->itemsSize){
+		//Clear last lines
+		move(LINES-1,0);
+		clrtoeol();
+
+		//Get title from input
+		mvprintw(LINES-1,0,"Input: ");
+		size_t inputLength = getnstr_custom(inputBuffer,INPUTBUFFER_LENGTH);
+
+		//Clear last lines
+		move(LINES-1,0);
+		clrtoeol();
+
+		//Silently ignore empty input
+		if(inputLength==0)
+			return EXIT_SUCCESS;
+
+		inputBuffer[inputLength++] = '\0';
+		char* title = malloc(inputLength);
+		if(!title)
+			return EXIT_ALLOCATION_FAILURE;
+		memcpy(title,inputBuffer,inputLength);
+
+		unpost_menu(menuData->menu);
+			//Initiate new item
+			if(!(menuData->items[menuData->itemsLen] = Item_createEntry(title,NULL)))
+				return EXIT_ITEMENTRYCREATION_FAILURE;
+
+			//Increment length
+			++menuData->itemsLen;
+
+			//Update the menu's items pointer
+			set_menu_items(menuData->menu,menuData->items);
+		post_menu(menuData->menu);
+	}
+
+	return EXIT_SUCCESS;
 }
 
 int main(){
+	int exitCode = EXIT_SUCCESS;
+	struct MenuData menuData;
+
 	//Initiate buffers
-	char* inputBuffer = calloc(INPUTBUFFER_LENGTH,sizeof(char));
-	if(!inputBuffer)
-		return EXIT_ALLOCATION_FAILURE;
+	if(!(inputBuffer = calloc(INPUTBUFFER_LENGTH,sizeof(char)))){
+		exitCode = EXIT_ALLOCATION_FAILURE;
+		goto End;
+	}
 
 	//Initiate screen
-	initscr();
-		cbreak();
-		noecho();
+	SCREEN* screen = newterm(getenv("TERM"),stdout,stdin);
+	cbreak();
+	noecho();
+	keypad(stdscr,TRUE);//Enable builtin menu control with keys
 
-	//Enable builtin menu control with keys
-	keypad(stdscr,TRUE);
-
-	//Initiate items
-	unsigned int itemsLen = 1,
-	             itemsSize = 10;
-	ITEM** items = calloc(itemsSize+1,sizeof(ITEM*));
-	items[0] = new_item("[Add...]",NULL);
+	//Initiate initial items
+	menuData.itemsLen  = 1;
+	menuData.itemsSize = 10;
+	menuData.items     = calloc(menuData.itemsSize+1,sizeof(ITEM*));
+	if(!(menuData.items[0] = Item_createButton("[Add...]",&button_performAdd))){
+		exitCode = EXIT_ALLOCATION_FAILURE;
+		goto End;
+	}
 
 	//Initiate menu
-	MENU* menu = new_menu(items);
+	menuData.menu = new_menu(menuData.items);
 
-	menu_opts_on(menu,O_ONEVALUE);//Enable single selection
-	menu_opts_off(menu,O_SHOWDESC);//Disable showing description
+	menu_opts_on (menuData.menu,O_ONEVALUE);//Enable single selection
+	menu_opts_off(menuData.menu,O_SHOWDESC);//Disable showing description
 
 	//Set selection marker
-	set_menu_mark(menu,"> ");
+	set_menu_mark(menuData.menu,"> ");
 
 	//Display the menu
-	post_menu(menu);
+	post_menu(menuData.menu);
 	refresh();
 
 	//For each key event
@@ -90,118 +156,99 @@ int main(){
 		switch(c){
 			//Move the selection down
 			case KEY_DOWN:
-				menu_driver(menu,REQ_DOWN_ITEM);
+				menu_driver(menuData.menu,REQ_DOWN_ITEM);
 				break;
 
 			//Move the selection up
 			case KEY_UP:
-				menu_driver(menu,REQ_UP_ITEM);
+				menu_driver(menuData.menu,REQ_UP_ITEM);
 				break;
 
 			//Move the selection to the beginning
 			case 262://Home
-				menu_driver(menu,REQ_FIRST_ITEM);
+				menu_driver(menuData.menu,REQ_FIRST_ITEM);
 				break;
 
 			//Move the selection to the end
 			case 360://End
-				menu_driver(menu,REQ_LAST_ITEM);
+				menu_driver(menuData.menu,REQ_LAST_ITEM);
 				break;
 
 			//Choose current item
 			case 10:{//Enter
 				//Get current item
-				ITEM* currentItem = current_item(menu);
+				ITEM* currentItem = current_item(menuData.menu);
+				struct ItemData* itemData = item_userptr(currentItem);
 
-				//Clear last lines
-				move(LINES-1,0);
-				clrtoeol();
+				//If button is selected, perform the button action
+				switch(itemData->type){
+					case ITEMDATATYPE_BUTTON:{
+						int returnCode = button_performAdd(&menuData);
+						if(returnCode!=EXIT_SUCCESS){
+							exitCode = returnCode;
+							goto End;
+						}
+					}	break;
 
-				//If first item is selected (Add...)
-				if(item_index(currentItem)==0 && itemsLen<itemsSize){
-					unpost_menu(menu);
-						//Get name from input
-						mvprintw(LINES-1,0,"Input:");
-						size_t inputLength = getnstr_custom(inputBuffer,INPUTBUFFER_LENGTH);
-						if(inputLength==0)
-							return EXIT_INPUT_ERROR;
-
-						char* name = malloc(inputLength);
-						memcpy(name,inputBuffer,inputLength);
-
+					case ITEMDATATYPE_ENTRY:
 						//Clear last lines
 						move(LINES-1,0);
 						clrtoeol();
 
-						//Initiate new item
-						items[itemsLen] = new_item(name,NULL);
+						//Write selected item info to last lines
+						mvprintw(LINES-1,0,"You have chosen item %i with name %s and description %s",
+							item_index(currentItem),
+							item_name(currentItem),
+							item_description(currentItem)
+						);
+						break;
 
-						//Allocate and initate item data
-						struct EntryData* data = malloc(sizeof(struct EntryData));
-						if(!data)
-							return EXIT_ALLOCATION_FAILURE;
-						set_item_userptr(items[itemsLen],data);
-
-						//Increment length
-						++itemsLen;
-
-						//Update the menu's items pointer
-						set_menu_items(menu,items);
-					post_menu(menu);
-				}else{
-					//Write selected item info to last lines
-					mvprintw(LINES-1,0,"You have chosen item %i with name %s and description %s",
-						item_index(currentItem),
-						item_name(currentItem),
-						item_description(currentItem)
-					);
+					default:
+						exitCode = EXIT_UNKNOWN_ITEMDATATYPE;
+						goto End;
 				}
 
 				refresh();
-				pos_menu_cursor(menu);
+				pos_menu_cursor(menuData.menu);
 
 			}	break;
 
 			//Remove current item
 			case 330://Delete
 			case 263:{//Backspace
-				if(itemsLen>0){
+				if(menuData.itemsLen>0){
 					//Get current item
-					ITEM* item = current_item(menu);
-					int index = item_index(item);
+					ITEM* item = current_item(menuData.menu);
+					struct ItemData* data = item_userptr(item);
 
-					//Deny removal of first item (Add...)
-					if(index==0)
+					//Deny removal of non-entry items
+					if(data->type != ITEMDATATYPE_ENTRY)
 						break;
 
-					//Free item data
-					free(item_name(item));
-					free(item_description(item));
-					free(item_userptr(item));
+					int index = item_index(item);
 
-					//Free item
-					free_item(item);
+					Item_free(item);
 
-					unpost_menu(menu);
+					unpost_menu(menuData.menu);
 						//Move items in front
-						for(int i=index;i<itemsLen;++i)
-							items[i]=items[i+1];
+						for(int i=index;i<menuData.itemsLen;++i)
+							menuData.items[i]=menuData.items[i+1];
 
 						//Decrement length
-						--itemsLen;
+						--menuData.itemsLen;
 
 						//Update the menu's items pointer
-						set_menu_items(menu,items);
-					post_menu(menu);
+						set_menu_items(menuData.menu,menuData.items);
+					post_menu(menuData.menu);
 				}
 			}	break;
 
 			case ' ':
-				menu_driver(menu,REQ_TOGGLE_ITEM);
+				menu_driver(menuData.menu,REQ_TOGGLE_ITEM);
 				break;
 
 			//Quit application
-			case 113://Q
+			case 'q':
 			case EOF:
 			case KEY_CTRL('d'):
 				goto End;
@@ -210,14 +257,15 @@ int main(){
 
 	End:
 	//Free allocated memory
-	unpost_menu(menu);
-	for(ITEM** item=items;*item!=NULL;++item)
+	unpost_menu(menuData.menu);
+	for(ITEM** item=menuData.items;*item!=NULL;++item)
 		free_item(*item);
-	free(items);
-	free_menu(menu);
+	free(menuData.items);
+	free_menu(menuData.menu);
 	endwin();
+	delscreen(screen);
 
 	free(inputBuffer);
 
-	return EXIT_SUCCESS;
+	return exitCode;
 }
