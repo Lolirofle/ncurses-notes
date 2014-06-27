@@ -6,10 +6,12 @@ struct MenuData{
 
 	ITEM** items;
 	unsigned int itemsLen,
-	             itemsSize;
+	             itemsSize,
+	             itemsNextId;
 };
 
 struct EntryData{
+	unsigned int id;
 	char* title;
 	char* description;
 	unsigned short priority;

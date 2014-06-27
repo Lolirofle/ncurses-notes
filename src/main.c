@@ -15,7 +15,7 @@
 #define INPUTBUFFER_LENGTH 512
 char* inputBuffer;
 
-static ITEM* Item_createEntry(char* title,char* description){
+static ITEM* Item_createEntry(unsigned int id,char* title,char* description){
 	ITEM* item = new_item(title,description);
 	if(!item)
 		return NULL;
@@ -29,6 +29,7 @@ static ITEM* Item_createEntry(char* title,char* description){
 
 	data->type = ITEMDATATYPE_ENTRY;
 	data->entry = (struct EntryData){
+		.id          = id,
 		.title       = title,
 		.description = description,
 		.priority    = 0,
@@ -288,7 +289,7 @@ static int button_performAdd(struct MenuData* menuData){
 			//Update menu with a new entry
 			unpost_menu(menuData->menu);
 				//Initiate new item
-				if(!(menuData->items[menuData->itemsLen] = Item_createEntry(titleStr,descriptionStr)))
+				if(!(menuData->items[menuData->itemsLen] = Item_createEntry(menuData->itemsNextId++,titleStr,descriptionStr)))
 					return EXIT_ITEMENTRYCREATION_FAILURE;
 
 				//Increment length
@@ -326,9 +327,10 @@ int main(){
 	keypad(stdscr,TRUE);//Enable builtin menu control with keys
 
 	//Initiate initial items
-	menuData.itemsLen  = 1;
-	menuData.itemsSize = 10;
-	menuData.items     = calloc(menuData.itemsSize+1,sizeof(ITEM*));
+	menuData.itemsNextId = 1;
+	menuData.itemsLen    = 1;
+	menuData.itemsSize   = 10;
+	menuData.items       = calloc(menuData.itemsSize+1,sizeof(ITEM*));
 	if(!(menuData.items[0] = Item_createButton("[Add...]",&button_performAdd))){
 		exitCode = EXIT_ALLOCATION_FAILURE;
 		goto End;

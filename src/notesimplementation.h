@@ -13,7 +13,7 @@ struct NotesImplementation{
 	bool(*swapEntry)(void* notesData,size_t a,size_t b);
 
 	bool(*forAllEntries)(void* notesData,bool(*func)(struct NoteEntry*,void* userData),void* userData);
-};
 
-bool Notes_loadFile(const char* filename,const struct NotesImplementation* impl,void* out_notesData);
-bool Notes_saveFile(const char* filename,const struct NotesImplementation* impl,const void* notesData);
+	bool load(void*,const struct NotesImplementation* impl,void* out_notesData);
+	bool save(void*,const struct NotesImplementation* impl,const void* notesData);
+};
